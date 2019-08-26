@@ -4251,12 +4251,7 @@ NULL
         }
     } else if (!strcasecmp(c->argv[1]->ptr,"nodes") && c->argc == 2) {
         /* CLUSTER NODES */
-        robj *o;
-        sds ci = clusterGenNodesDescription(0);
-
-        o = createObject(OBJ_STRING,ci);
-        addReplyBulk(c,o);
-        decrRefCount(o);
+        addReplyBulkSds(c,clusterGenNodesDescription(0));
     } else if (!strcasecmp(c->argv[1]->ptr,"myid") && c->argc == 2) {
         /* CLUSTER MYID */
         addReplyBulkCBuffer(c,myself->name, CLUSTER_NAMELEN);
@@ -4776,7 +4771,7 @@ NULL
 
 /* Generates a DUMP-format representation of the object 'o', adding it to the
  * io stream pointed by 'rio'. This function can't fail. */
-void createDumpPayload(rio *payload, robj *o) {
+void createDumpPayload(rio *payload, robj *o, robj *key) {
     unsigned char buf[2];
     uint64_t crc;
 
@@ -4784,7 +4779,7 @@ void createDumpPayload(rio *payload, robj *o) {
      * byte followed by the serialized object. This is understood by RESTORE. */
     rioInitWithBuffer(payload,sdsempty());
     serverAssert(rdbSaveObjectType(payload,o));
-    serverAssert(rdbSaveObject(payload,o));
+    serverAssert(rdbSaveObject(payload,o,key));
 
     /* Write the footer, this is how it looks like:
      * ----------------+---------------------+---------------+
@@ -4832,7 +4827,7 @@ int verifyDumpPayload(unsigned char *p, size_t len) {
  * DUMP is actually not used by Redis Cluster but it is the obvious
  * complement of RESTORE and can be useful for different applications. */
 void dumpCommand(client *c) {
-    robj *o, *dumpobj;
+    robj *o;
     rio payload;
 
     /* Check if the key is here. */
@@ -4842,12 +4837,10 @@ void dumpCommand(client *c) {
     }
 
     /* Create the DUMP encoded representation. */
-    createDumpPayload(&payload,o);
+    createDumpPayload(&payload,o,c->argv[1]);
 
     /* Transfer to the client */
-    dumpobj = createObject(OBJ_STRING,payload.io.buffer.ptr);
-    addReplyBulk(c,dumpobj);
-    decrRefCount(dumpobj);
+    addReplyBulkSds(c,payload.io.buffer.ptr);
     return;
 }
 
@@ -4915,7 +4908,7 @@ void restoreCommand(client *c) {
 
     rioInitWithBuffer(&payload,c->argv[3]->ptr);
     if (((type = rdbLoadObjectType(&payload)) == -1) ||
-        ((obj = rdbLoadObject(type,&payload)) == NULL))
+        ((obj = rdbLoadObject(type,&payload,c->argv[1])) == NULL))
     {
         addReplyError(c,"Bad data format");
         return;
@@ -5203,7 +5196,7 @@ try_again:
 
         /* Emit the payload argument, that is the serialized object using
          * the DUMP format. */
-        createDumpPayload(&payload,ov[j]);
+        createDumpPayload(&payload,ov[j],kv[j]);
         serverAssertWithInfo(c,NULL,
             rioWriteBulkString(&cmd,payload.io.buffer.ptr,
                                sdslen(payload.io.buffer.ptr)));
